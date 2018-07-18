@@ -54,6 +54,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -116,6 +117,7 @@ type Pinger struct {
 	// Debug runs in debug mode
 	Debug bool
 
+	ExitOnSuccess bool
 	// Number of packets sent
 	PacketsSent int
 
@@ -307,9 +309,14 @@ func (p *Pinger) run() {
 				fmt.Println("FATAL: ", err.Error())
 			}
 		case r := <-recv:
-			err := p.processPacket(r)
+			exit, err := p.processPacket(r)
 			if err != nil {
 				fmt.Println("FATAL: ", err.Error())
+			}
+			if exit {
+				close(p.done)
+				wg.Wait()
+				return
 			}
 		default:
 			if p.Count > 0 && p.PacketsRecv >= p.Count {
@@ -401,7 +408,7 @@ func (p *Pinger) recvICMP(
 	}
 }
 
-func (p *Pinger) processPacket(recv *packet) error {
+func (p *Pinger) processPacket(recv *packet) (bool, error) {
 	var bytes []byte
 	var proto int
 	if p.ipv4 {
@@ -419,12 +426,12 @@ func (p *Pinger) processPacket(recv *packet) error {
 	var m *icmp.Message
 	var err error
 	if m, err = icmp.ParseMessage(proto, bytes[:recv.nbytes]); err != nil {
-		return fmt.Errorf("Error parsing icmp message")
+		return false, fmt.Errorf("Error parsing icmp message")
 	}
 
 	if m.Type != ipv4.ICMPTypeEchoReply && m.Type != ipv6.ICMPTypeEchoReply {
 		// Not an echo reply, ignore it
-		return nil
+		return false, nil
 	}
 
 	outPkt := &Packet{
@@ -436,10 +443,15 @@ func (p *Pinger) processPacket(recv *packet) error {
 	case *icmp.Echo:
 		outPkt.Rtt = time.Since(bytesToTime(pkt.Data[:timeSliceLength]))
 		outPkt.Seq = pkt.Seq
+		// Set Rtt timeout to 3 seconds. This Rtt check can also pass some malformed packets.
+		if outPkt.Rtt > 3000000000 {
+			logrus.Debugf("Ignoring bad Rtt time: %v", int64(outPkt.Rtt))
+			return false, nil
+		}
 		p.PacketsRecv += 1
 	default:
 		// Very bad, not sure how this can happen
-		return fmt.Errorf("Error, invalid ICMP echo reply. Body type: %T, %s",
+		return false, fmt.Errorf("Error, invalid ICMP echo reply. Body type: %T, %s",
 			pkt, pkt)
 	}
 
@@ -448,8 +460,12 @@ func (p *Pinger) processPacket(recv *packet) error {
 	if handler != nil {
 		handler(outPkt)
 	}
+	if p.ExitOnSuccess {
+		return true, nil
+	} else {
+		return false, nil
+	}
 
-	return nil
 }
 
 func (p *Pinger) sendICMP(conn *icmp.PacketConn) error {

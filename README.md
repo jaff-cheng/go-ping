@@ -1,3 +1,8 @@
+# Changes made in this fork
+
+Add rtt timeout check to ignore some malformed ICMP reply packets.
+Add an option ExitOnSuccess.
+
 # go-ping
 [![GoDoc](https://godoc.org/github.com/sparrc/go-ping?status.svg)](https://godoc.org/github.com/sparrc/go-ping)
 [![Circle CI](https://circleci.com/gh/sparrc/go-ping.svg?style=svg)](https://circleci.com/gh/sparrc/go-ping)
